@@ -1,0 +1,8 @@
+pyside6
+aiogram
+cryptography
+requests
+pandas
+pyqtgraph
+sqlalchemy
+python-dotenv
