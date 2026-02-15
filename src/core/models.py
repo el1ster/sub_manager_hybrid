@@ -79,6 +79,7 @@ class Subscription(Base):
     cost_uah: Mapped[float] = mapped_column(Float)
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
     period: Mapped[str] = mapped_column(String(50))  # Місяць/Квартал/Рік
+    last_payment: Mapped[date] = mapped_column(Date)
     next_payment: Mapped[date] = mapped_column(Date)
     payment_type: Mapped[PaymentType] = mapped_column(Enum(PaymentType), default=PaymentType.AUTO)
     state: Mapped[SubscriptionState] = mapped_column(Enum(SubscriptionState), default=SubscriptionState.ACTIVE)

@@ -6,3 +6,4 @@ __pycache__/
 .idea/
 .vscode/
 *.pyc
+seed_test_data.py

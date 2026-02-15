@@ -1,7 +1,9 @@
 import sys
+from PySide6.QtWidgets import QApplication
 from src.database.db_manager import db
 from src.core.config import Config
 from src.core.models import SystemSettings
+from src.ui.main_window import MainWindow
 
 def initialize_app():
     """Ініціалізація всіх систем додатка."""
@@ -30,11 +32,15 @@ def initialize_app():
     print("========================================================")
 
 def main():
-    # Початкова ініціалізація
+    # Початкова ініціалізація систем
     initialize_app()
     
-    # Тут пізніше буде запуск PySide6 MainWindow
-    print("Запуск GUI (PySide6) буде реалізовано у наступному етапі.")
+    # Запуск GUI
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()
