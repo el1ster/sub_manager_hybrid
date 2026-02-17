@@ -83,6 +83,7 @@ class Subscription(Base):
     next_payment: Mapped[date] = mapped_column(Date)
     payment_type: Mapped[PaymentType] = mapped_column(Enum(PaymentType), default=PaymentType.AUTO)
     state: Mapped[SubscriptionState] = mapped_column(Enum(SubscriptionState), default=SubscriptionState.ACTIVE)
+    is_reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False) # Нагадування відправлено, очікується оплата
     
     category: Mapped["Category"] = relationship(back_populates="subscriptions")
     history: Mapped[list["PaymentHistory"]] = relationship(back_populates="subscription")
@@ -97,6 +98,7 @@ class Draft(Base):
     currency: Mapped[str] = mapped_column(String(3))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     status: Mapped[DraftStatus] = mapped_column(Enum(DraftStatus), default=DraftStatus.NEW)
+    chat_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True) # Telegram Chat ID
 
 class PaymentHistory(Base):
     """Архів транзакцій (для статистики)."""

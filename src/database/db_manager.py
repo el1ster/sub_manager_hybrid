@@ -4,14 +4,16 @@ import uuid
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, joinedload
 from cryptography.fernet import Fernet
+from datetime import date, datetime
+from src.core.config import Config
 from src.core.models import (Base, SystemSettings, Currency, Category, 
-                               Subscription, Draft, DraftStatus, SyncQueue, SyncDirection)
+                               Subscription, Draft, DraftStatus, SyncQueue, SyncDirection, PaymentHistory, SubscriptionState)
 from typing import List, Optional
 
 class DBManager:
     """Менеджер для роботи з базою даних SQLite."""
     
-    def __init__(self, db_path: str = "sub_manager.sqlite"):
+    def __init__(self, db_path: str = str(Config.DB_PATH)):
         self.db_path = db_path
         self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
         self.Session = sessionmaker(bind=self.engine)
@@ -80,14 +82,22 @@ class DBManager:
 
     def add_sync_event(self, event_type: str, data: dict):
         """Створює запис у черзі синхронізації (відповідь боту)."""
-        # TODO: Тут має бути шифрування AES. Поки що зберігаємо як JSON для прототипу.
         payload_data = {"event": event_type, "data": data}
         payload_json = json.dumps(payload_data, ensure_ascii=False)
         
         with self.get_session() as session:
+            enc_key_setting = session.query(SystemSettings).filter_by(setting_key="enc_key").first()
+            if not enc_key_setting:
+                print("[Security Error] Encryption key not found. Cannot encrypt sync event.")
+                # Fallback to unencrypted or raise error based on desired security level
+                encrypted_payload = payload_json.encode('utf-8') # Store unencrypted but encoded
+            else:
+                fernet = Fernet(enc_key_setting.setting_value.encode('utf-8'))
+                encrypted_payload = fernet.encrypt(payload_json.encode('utf-8'))
+
             sync_item = SyncQueue(
                 uuid=str(uuid.uuid4()),
-                payload=payload_json, # В майбутньому: encrypt(payload_json)
+                payload=encrypted_payload.decode('utf-8'), # Store as string
                 direction=SyncDirection.TO_BOT
             )
             session.add(sync_item)
@@ -132,19 +142,51 @@ class DBManager:
         with self.get_session() as session:
             return session.query(Draft).filter_by(id=draft_id).first()
 
-    def approve_draft(self, draft_id: int, subscription: Subscription) -> None:
+    def approve_draft(self, draft_id: int, subscription: Subscription) -> Optional[int]:
         with self.get_session() as session:
             draft = session.query(Draft).filter_by(id=draft_id).first()
             if draft:
                 session.add(subscription)
                 draft.status = DraftStatus.PROCESSED
+                chat_id = draft.chat_id
                 session.commit()
+                return chat_id
+            return None
 
-    def reject_draft(self, draft_id: int) -> None:
+    def reject_draft(self, draft_id: int) -> Optional[int]:
         with self.get_session() as session:
             draft = session.query(Draft).filter_by(id=draft_id).first()
             if draft:
                 draft.status = DraftStatus.PROCESSED # Or maybe a REJECTED status
+                chat_id = draft.chat_id
+                session.commit()
+                return chat_id
+            return None
+
+    # --- Payment History Methods ---
+
+    def get_payment_history(self) -> List["PaymentHistory"]:
+        """Повертає всю історію платежів, завантажуючи пов'язані підписки."""
+        with self.get_session() as session:
+            # Eagerly load the 'subscription' relationship to avoid lazy loading issues
+            return session.query(PaymentHistory).options(joinedload(PaymentHistory.subscription)).order_by(PaymentHistory.pay_date.desc()).all()
+
+    def mark_subscription_paid(self, sub_id: int, last_payment: date, next_payment: date, amount_paid: float):
+        """Відзначає підписку як сплачену, оновлює дати та додає запис в історію."""
+        with self.get_session() as session:
+            subscription = session.query(Subscription).filter_by(id=sub_id).first()
+            if subscription:
+                subscription.last_payment = last_payment
+                subscription.next_payment = next_payment
+                subscription.state = SubscriptionState.ACTIVE # Установить статус на Активна
+                subscription.is_reminder_sent = False # Сбросить флаг напоминания
+                
+                payment_record = PaymentHistory(
+                    sub_id=sub_id,
+                    final_sum=amount_paid,
+                    pay_date=datetime.utcnow() # Use UTC now for consistency
+                )
+                session.add(payment_record)
                 session.commit()
 
 # Глобальний екземпляр для зручності

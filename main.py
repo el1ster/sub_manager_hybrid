@@ -37,7 +37,7 @@ def main():
     
     # Запуск GUI
     app = QApplication(sys.argv)
-    window = MainWindow()
+    window = MainWindow(app) # Pass app instance
     window.show()
     
     sys.exit(app.exec())

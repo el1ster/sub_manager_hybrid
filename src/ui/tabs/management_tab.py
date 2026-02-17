@@ -1,12 +1,29 @@
 import re
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableView, QPushButton,
                                QHeaderView, QAbstractItemView, QGroupBox, QListWidget, 
-                               QListWidgetItem, QMessageBox)
-from PySide6.QtCore import Qt
+                               QListWidgetItem, QMessageBox, QLineEdit)
+from PySide6.QtCore import Qt, QSortFilterProxyModel
 from src.ui.models.subscription_model import SubscriptionTableModel
 from src.ui.dialogs.subscription_dialog import SubscriptionDialog
 from src.database.db_manager import db
-from src.core.models import Subscription, Draft, PaymentType
+from src.core.models import Subscription, Draft, PaymentType, PaymentHistory, SubscriptionState
+
+class SubscriptionFilterProxyModel(QSortFilterProxyModel):
+    """Кастомний фільтр для пошуку по всіх колонках, крім ID."""
+    
+    def filterAcceptsRow(self, source_row, source_parent):
+        model = self.sourceModel()
+        regex = self.filterRegularExpression()
+        
+        # Перевіряємо всі колонки, починаючи з 1 (пропускаємо ID)
+        for col in range(1, model.columnCount()):
+            index = model.index(source_row, col, source_parent)
+            data = model.data(index, Qt.ItemDataRole.DisplayRole)
+            
+            if data and regex.match(str(data)).hasMatch():
+                return True
+                
+        return False
 
 class ManagementTab(QWidget):
     """Віджет для вкладки 'Управління'."""
@@ -21,9 +38,20 @@ class ManagementTab(QWidget):
         table_group = QGroupBox("Активні підписки")
         table_layout = QVBoxLayout(table_group)
         
+        # Пошук підписок
+        self.search_subs_edit = QLineEdit()
+        self.search_subs_edit.setPlaceholderText("Пошук підписки...")
+        
         self.table_view = QTableView()
         self.table_model = SubscriptionTableModel()
-        self.table_view.setModel(self.table_model)
+        
+        # Proxy Model для фільтрації
+        self.proxy_model = SubscriptionFilterProxyModel()
+        self.proxy_model.setSourceModel(self.table_model)
+        self.proxy_model.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        # self.proxy_model.setFilterKeyColumn(1) - Не потрібно, логіка в класі
+        
+        self.table_view.setModel(self.proxy_model)
         
         # Налаштування вигляду таблиці
         self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -33,18 +61,25 @@ class ManagementTab(QWidget):
         self.add_button = QPushButton("Додати підписку")
         self.edit_button = QPushButton("Редагувати")
         self.delete_button = QPushButton("Видалити")
+        self.mark_paid_button = QPushButton("Відзначити як сплачене")
         
         buttons_layout = QHBoxLayout()
         buttons_layout.addWidget(self.add_button)
         buttons_layout.addWidget(self.edit_button)
         buttons_layout.addWidget(self.delete_button)
+        buttons_layout.addWidget(self.mark_paid_button)
         
+        table_layout.addWidget(self.search_subs_edit)
         table_layout.addWidget(self.table_view)
         table_layout.addLayout(buttons_layout)
         
         # --- Права частина (Панель чернеток) ---
         self.drafts_group = QGroupBox("Чернетки з Telegram")
         drafts_layout = QVBoxLayout(self.drafts_group)
+        
+        # Пошук чернеток
+        self.search_drafts_edit = QLineEdit()
+        self.search_drafts_edit.setPlaceholderText("Пошук чернетки...")
         
         self.drafts_list = QListWidget()
         self.approve_button = QPushButton("Створити підписку")
@@ -54,6 +89,7 @@ class ManagementTab(QWidget):
         drafts_buttons_layout.addWidget(self.approve_button)
         drafts_buttons_layout.addWidget(self.reject_button)
 
+        drafts_layout.addWidget(self.search_drafts_edit)
         drafts_layout.addWidget(self.drafts_list)
         drafts_layout.addLayout(drafts_buttons_layout)
         
@@ -65,8 +101,12 @@ class ManagementTab(QWidget):
         self.add_button.clicked.connect(self.add_subscription)
         self.edit_button.clicked.connect(self.edit_subscription)
         self.delete_button.clicked.connect(self.delete_subscription)
+        self.mark_paid_button.clicked.connect(self.mark_as_paid) # Connect new button
         self.approve_button.clicked.connect(self.approve_draft)
         self.reject_button.clicked.connect(self.reject_draft)
+        
+        self.search_subs_edit.textChanged.connect(self.proxy_model.setFilterRegularExpression)
+        self.search_drafts_edit.textChanged.connect(self.filter_drafts)
         
         # --- Завантаження даних ---
         self.load_subscriptions()
@@ -95,6 +135,12 @@ class ManagementTab(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, draft.id)
             self.drafts_list.addItem(item)
             
+    def filter_drafts(self, text):
+        """Фільтрує список чернеток."""
+        for i in range(self.drafts_list.count()):
+            item = self.drafts_list.item(i)
+            item.setHidden(text.lower() not in item.text().lower())
+
     def add_subscription(self):
         dialog = SubscriptionDialog()
         if dialog.exec():
@@ -109,7 +155,12 @@ class ManagementTab(QWidget):
             QMessageBox.warning(self, "Помилка", "Будь ласка, оберіть підписку для редагування.")
             return
         
-        row_index = selected_rows[0].row()
+        # Отримуємо індекс з proxy model
+        proxy_index = selected_rows[0]
+        # Конвертуємо в індекс source model
+        source_index = self.proxy_model.mapToSource(proxy_index)
+        row_index = source_index.row()
+        
         subscription_to_edit = self.table_model.get_subscription(row_index)
         
         if subscription_to_edit:
@@ -136,7 +187,12 @@ class ManagementTab(QWidget):
             QMessageBox.warning(self, "Помилка", "Будь ласка, оберіть підписку для видалення.")
             return
             
-        row_index = selected_rows[0].row()
+        # Отримуємо індекс з proxy model
+        proxy_index = selected_rows[0]
+        # Конвертуємо в індекс source model
+        source_index = self.proxy_model.mapToSource(proxy_index)
+        row_index = source_index.row()
+        
         subscription_to_delete = self.table_model.get_subscription(row_index)
         
         if subscription_to_delete:
@@ -145,7 +201,7 @@ class ManagementTab(QWidget):
                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.Yes:
                 db.delete_subscription(subscription_to_delete.id)
-                # Фідбек боту про видалення
+                # Фідбек боту про видалення (без chat_id, так как подписка уже на ПК)
                 db.add_sync_event("subscription_deleted", {"name": subscription_to_delete.name})
                 self.load_subscriptions()
     
@@ -160,7 +216,6 @@ class ManagementTab(QWidget):
         
         if draft:
             # 1. Очистка назви (Regex)
-            # Видаляємо "Telegram:", "Заявка:", зайві пробіли та спецсимволи на початку
             clean_name = re.sub(r'^(Telegram|Заявка|Bot|Request)[:\s-]*', '', draft.raw_name, flags=re.IGNORECASE).strip()
             
             # 2. Конвертація валюти
@@ -179,12 +234,16 @@ class ManagementTab(QWidget):
             if dialog.exec():
                 new_sub = dialog.get_data()
                 if new_sub:
-                    db.approve_draft(draft_id, new_sub)
-                    # Фідбек боту про успішне додавання
+                    sub_name = new_sub.name
+                    sub_cost = new_sub.cost_uah
+                    
+                    chat_id = db.approve_draft(draft_id, new_sub)
+                    
                     db.add_sync_event("subscription_approved", {
                         "original_draft": draft.raw_name,
-                        "new_name": new_sub.name,
-                        "cost_uah": new_sub.cost_uah
+                        "new_name": sub_name,
+                        "cost_uah": sub_cost,
+                        "chat_id": chat_id
                     })
                     self.refresh_all_data()
 
@@ -200,7 +259,47 @@ class ManagementTab(QWidget):
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         
         if reply == QMessageBox.StandardButton.Yes:
-            db.reject_draft(draft_id)
-            # Фідбек боту про відхилення
-            db.add_sync_event("draft_rejected", {"draft_id": draft_id})
+            chat_id = db.reject_draft(draft_id)
+            db.add_sync_event("draft_rejected", {"draft_id": draft_id, "chat_id": chat_id})
             self.load_drafts()
+
+    def mark_as_paid(self):
+        selected_rows = self.table_view.selectionModel().selectedRows()
+        if not selected_rows:
+            QMessageBox.warning(self, "Помилка", "Будь ласка, оберіть підписку для відзначення як сплаченої.")
+            return
+        
+        proxy_index = selected_rows[0]
+        source_index = self.proxy_model.mapToSource(proxy_index)
+        row_index = source_index.row()
+        
+        subscription_to_mark = self.table_model.get_subscription(row_index)
+        
+        if subscription_to_mark:
+            reply = QMessageBox.question(self, "Підтвердження платежу",
+                                         f"Підтвердити оплату для '{subscription_to_mark.name}' (Сума: {subscription_to_mark.cost_uah:.2f} UAH)?",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
+                from datetime import date
+                from dateutil.relativedelta import relativedelta
+
+                new_last_payment = date.today()
+                
+                delta = None
+                if subscription_to_mark.period == "Місяць":
+                    delta = relativedelta(months=1)
+                elif subscription_to_mark.period == "Квартал":
+                    delta = relativedelta(months=3)
+                elif subscription_to_mark.period == "Рік":
+                    delta = relativedelta(years=1)
+                
+                new_next_payment = new_last_payment + delta if delta else new_last_payment
+
+                db.mark_subscription_paid(
+                    subscription_to_mark.id, 
+                    new_last_payment, 
+                    new_next_payment, 
+                    subscription_to_mark.cost_uah
+                )
+                QMessageBox.information(self, "Успіх", f"Підписка '{subscription_to_mark.name}' відзначена як сплачена.")
+                self.refresh_all_data()

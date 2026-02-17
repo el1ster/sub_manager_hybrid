@@ -14,7 +14,7 @@ class Config:
     
     # БД
     DB_NAME = os.getenv("DB_NAME", "sub_manager.sqlite")
-    DB_PATH = BASE_DIR / DB_NAME
+    DB_PATH = SRC_DIR / "server" / DB_NAME
     SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
     
     # Telegram Bot
